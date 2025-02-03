@@ -160,4 +160,4 @@ Contributions, bug reports, and feature requests are welcome. Please open an iss
 
 ---
 
-*Developed with inspiration from the masscan project and Ollama’s innovative approach to local AI model management.*
+*Developed with inspiration from the masscan project and Ollama’s innovative approach to local AI model management. Credit to AI models for filling in my knowledge gaps which there are lots of.*
