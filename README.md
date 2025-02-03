@@ -160,10 +160,4 @@ Contributions, bug reports, and feature requests are welcome. Please open an iss
 
 ---
 
-## License
-
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
-
----
-
 *Developed with inspiration from the masscan project and Ollama’s innovative approach to local AI model management.*
