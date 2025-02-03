@@ -114,7 +114,7 @@ The script’s configurable parameters are defined at the top of the file. You c
 Simply run the script from the command line:
 
 ```bash
-python3 ollama_scanner.py
+python3 main.py
 ```
 
 The script will:
