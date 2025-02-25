@@ -20,27 +20,13 @@ import threading
 from queue import Queue
 from requests.exceptions import RequestException
 
+from ips import get_ips_from_file
+
 # -------------------------------------------------------------------
 # Exclusion Subnets: Government and Private Networks
 # -------------------------------------------------------------------
-COMMON_GOVERNMENT_SUBNETS = [
-    "6.0.0.0/8",    # US Department of Defense
-    "7.0.0.0/8",    # US Department of Defense
-    "11.0.0.0/8",   # US Department of Defense
-    "21.0.0.0/8",   # US Department of Defense
-    "22.0.0.0/8",   # US Department of Defense
-    "26.0.0.0/8",   # US Department of Defense
-    "28.0.0.0/8",   # US Department of Defense
-    "29.0.0.0/8",   # US Department of Defense
-    "30.0.0.0/8",   # US Department of Defense
-    "33.0.0.0/8",   # US Department of Defense
-    "55.0.0.0/8",   # US Department of Defense
-    "214.0.0.0/8",  # US Department of Defense
-    # Private RFC1918 address blocks
-    "10.0.0.0/8",
-    "172.16.0.0/12",
-    "192.168.0.0/16"
-]
+IP_FILE_NAME = "IP2LOCATION-LITE-DB1.NEW.CSV"
+COMMON_GOVERNMENT_SUBNETS = get_ips_from_file(IP_FILE_NAME)
 
 # -------------------------------------------------------------------
 # Configurable Parameters
