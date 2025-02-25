@@ -25,7 +25,7 @@ COMMON_GOVERNMENT_SUBNETS = [
     "192.168.0.0/16"
 ]
 IPS_FILE = "IP2LOCATION-LITE-DB1.NEW.CSV"
-TARGET_RANGE_LIST = get_ips_from_file(IPS_FILE)
+TARGET_RANGE_LIST = list(get_ips_from_file(IPS_FILE))
 
 # -------------------------------------------------------------------
 # Configurable Parameters
