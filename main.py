@@ -25,23 +25,30 @@ from ips import get_ips_from_file
 # -------------------------------------------------------------------
 # Exclusion Subnets: Government and Private Networks
 # -------------------------------------------------------------------
-IP_FILE_NAME = "IP2LOCATION-LITE-DB1.NEW.CSV"
-COMMON_GOVERNMENT_SUBNETS = get_ips_from_file(IP_FILE_NAME)
+COMMON_GOVERNMENT_SUBNETS = [
 
+    # Private RFC1918 address blocks
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16"
+]
+IPS_FILE = "IP2LOCATION-LITE-DB1.NEW.CSV.csv"
+TARGET_RANGE_LIST = get_ips_from_file(IPS_FILE)
 # -------------------------------------------------------------------
 # Configurable Parameters
 # -------------------------------------------------------------------
-NUM_WORKER_THREADS = 500         # Number of concurrent threads for HTTP queries
-HTTP_TIMEOUT = 2                 # Timeout in seconds for each HTTP request to Ollama endpoints
-MASSCAN_RATE = 500000            # Transmission rate for masscan (packets per second)
-TARGET_RANGE = "0.0.0.0/0"         # Target range (entire IPv4 space) -- use with caution!
-PORTS_TO_SCAN = [11434]          # Ports to scan (default Ollama port)
+NUM_WORKER_THREADS = 500  # Number of concurrent threads for HTTP queries
+HTTP_TIMEOUT = 2  # Timeout in seconds for each HTTP request to Ollama endpoints
+MASSCAN_RATE = 500000  # Transmission rate for masscan (packets per second)
+TARGET_RANGE = "0.0.0.0/0"  # Target range (entire IPv4 space) -- use with caution!
+PORTS_TO_SCAN = [11434]  # Ports to scan (default Ollama port)
 CSV_FILENAME = f"ollama_scan_results_{int(time.time())}.csv"  # CSV file name based on current timestamp
 
 # -------------------------------------------------------------------
 # CSV Writer Setup: Thread-Safe CSV Writing
 # -------------------------------------------------------------------
 csv_lock = threading.Lock()
+
 
 def get_csv_writer():
     """
@@ -57,7 +64,9 @@ def get_csv_writer():
         writer.writeheader()
     return csv_file, writer
 
+
 csv_file_handle, csv_writer = get_csv_writer()
+
 
 # -------------------------------------------------------------------
 # Function: query_ollama_endpoints
@@ -122,6 +131,7 @@ def query_ollama_endpoints(ip, port):
 
     return data_collected
 
+
 # -------------------------------------------------------------------
 # Function: worker_thread
 # -------------------------------------------------------------------
@@ -159,11 +169,33 @@ def worker_thread(queue):
             print(f"[+] Found model(s)! Valid Ollama at: {ip}:{port}")
         queue.task_done()
 
+
 # -------------------------------------------------------------------
 # Function: masscan_streaming_scan
 # -------------------------------------------------------------------
 
-def sub_task(cmd,q,threads):
+
+def masscan_streaming_scan(target_range):
+    """
+    Runs masscan with specified parameters and streams JSON output.
+    Enqueues each discovered (ip, port) for further validation by worker threads.
+    """
+    ports_str = ",".join(map(str, PORTS_TO_SCAN))
+    cmd = [
+        "masscan",
+        "-p", ports_str,
+        target_range,
+        "--rate", str(MASSCAN_RATE),
+        "--wait", "5",
+        "-oJ", "-"
+    ]
+    # Create a Queue and launch worker threads.
+    q = Queue()
+    threads = []
+    cnt = 0
+    # Append exclusion subnets to the command.
+    for subnet in COMMON_GOVERNMENT_SUBNETS:
+        cmd += ["--exclude", subnet]
     print(f"[+] Starting masscan with: {' '.join(cmd)}")
     print(f"[+] Worker threads: {NUM_WORKER_THREADS}")
     print(f"[+] Saving valid hosts (with models) to: {CSV_FILENAME}")
@@ -200,44 +232,6 @@ def sub_task(cmd,q,threads):
         _, err_output = proc.communicate()
         if err_output:
             print("[!] masscan stderr:", err_output)
-
-def masscan_streaming_scan():
-    """
-    Runs masscan with specified parameters and streams JSON output.
-    Enqueues each discovered (ip, port) for further validation by worker threads.
-    """
-    ports_str = ",".join(map(str, PORTS_TO_SCAN))
-    cmd = [
-        "masscan",
-        "-p", ports_str,
-        TARGET_RANGE,
-        "--rate", str(MASSCAN_RATE),
-        "--wait", "5",
-        "-oJ", "-"
-    ]
-    # Create a Queue and launch worker threads.
-    q = Queue()
-    threads = []
-    cnt = 0
-    # Append exclusion subnets to the command.
-    for subnet in COMMON_GOVERNMENT_SUBNETS:
-        cmd += ["--exclude", subnet]
-        cnt += 1
-        if cnt == 20:
-            sub_task(cmd,q,threads)
-            cnt = 0
-            cmd = [
-                "masscan",
-                "-p", ports_str,
-                TARGET_RANGE,
-                "--rate", str(MASSCAN_RATE),
-                "--wait", "5",
-                "-oJ", "-"
-            ]
-
-    else:
-        if cnt >0:
-            sub_task(cmd, q, threads)
     # Send a sentinel (None) to each worker thread to signal termination.
     for _ in range(NUM_WORKER_THREADS):
         q.put(None)
@@ -247,6 +241,7 @@ def masscan_streaming_scan():
 
     print("[+] Scanning & processing complete.")
 
+
 # -------------------------------------------------------------------
 # Main function
 # -------------------------------------------------------------------
@@ -254,7 +249,9 @@ def main():
     """
     Main entry point for the scanner. Initiates the masscan streaming scan.
     """
-    masscan_streaming_scan()
+    for target_range in TARGET_RANGE_LIST:
+        masscan_streaming_scan(target_range)
+
 
 if __name__ == "__main__":
     main()
