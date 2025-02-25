@@ -235,6 +235,9 @@ def masscan_streaming_scan():
                 "-oJ", "-"
             ]
 
+    else:
+        if cnt >0:
+            sub_task(cmd, q, threads)
     # Send a sentinel (None) to each worker thread to signal termination.
     for _ in range(NUM_WORKER_THREADS):
         q.put(None)
