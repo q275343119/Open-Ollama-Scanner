@@ -13,8 +13,9 @@ import time
 import aiohttp
 import asyncio.subprocess as aiosubprocess
 from aiohttp import ClientSession, ClientTimeout
+from tqdm import tqdm
+
 from ips import get_ips_from_file
-from tqdm.asyncio import tqdm
 
 # -------------------------------------------------------------------
 # Exclusion Subnets: Government and Private Networks
@@ -25,7 +26,7 @@ COMMON_GOVERNMENT_SUBNETS = [
     "192.168.0.0/16"
 ]
 IPS_FILE = "IP2LOCATION-LITE-DB1.NEW.CSV"
-TARGET_RANGE_LIST = list(get_ips_from_file(IPS_FILE))
+TARGET_RANGE_LIST = list(get_ips_from_file(IPS_FILE))  # Load all IPs into memory
 
 # -------------------------------------------------------------------
 # Configurable Parameters
@@ -172,11 +173,11 @@ async def process_task(ip, port):
 # Main function with Progress Bar
 # -------------------------------------------------------------------
 async def main():
-    total_ranges = len(TARGET_RANGE_LIST)
-    # Create the progress bar for scanning IP ranges
-    async with tqdm(total=total_ranges, desc="Scanning IP Ranges") as progress_bar:
-        for target_range in TARGET_RANGE_LIST:
-            await masscan_streaming_scan(target_range, progress_bar)
+    total_ranges = len(TARGET_RANGE_LIST)  # Calculate the total number of IP ranges
+    progress_bar = tqdm(total=total_ranges, desc="Scanning IP Ranges")
+    for target_range in TARGET_RANGE_LIST:
+        await masscan_streaming_scan(target_range, progress_bar)
+    progress_bar.close()
 
 if __name__ == "__main__":
     asyncio.run(main())
