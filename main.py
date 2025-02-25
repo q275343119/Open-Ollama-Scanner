@@ -162,31 +162,12 @@ def worker_thread(queue):
 # -------------------------------------------------------------------
 # Function: masscan_streaming_scan
 # -------------------------------------------------------------------
-def masscan_streaming_scan():
-    """
-    Runs masscan with specified parameters and streams JSON output.
-    Enqueues each discovered (ip, port) for further validation by worker threads.
-    """
-    ports_str = ",".join(map(str, PORTS_TO_SCAN))
-    cmd = [
-        "masscan",
-        "-p", ports_str,
-        TARGET_RANGE,
-        "--rate", str(MASSCAN_RATE),
-        "--wait", "5",
-        "-oJ", "-"
-    ]
-    # Append exclusion subnets to the command.
-    for subnet in COMMON_GOVERNMENT_SUBNETS:
-        cmd += ["--exclude", subnet]
 
+def sub_task(cmd,q,threads):
     print(f"[+] Starting masscan with: {' '.join(cmd)}")
     print(f"[+] Worker threads: {NUM_WORKER_THREADS}")
     print(f"[+] Saving valid hosts (with models) to: {CSV_FILENAME}")
 
-    # Create a Queue and launch worker threads.
-    q = Queue()
-    threads = []
     for _ in range(NUM_WORKER_THREADS):
         t = threading.Thread(target=worker_thread, args=(q,), daemon=True)
         t.start()
@@ -219,6 +200,40 @@ def masscan_streaming_scan():
         _, err_output = proc.communicate()
         if err_output:
             print("[!] masscan stderr:", err_output)
+
+def masscan_streaming_scan():
+    """
+    Runs masscan with specified parameters and streams JSON output.
+    Enqueues each discovered (ip, port) for further validation by worker threads.
+    """
+    ports_str = ",".join(map(str, PORTS_TO_SCAN))
+    cmd = [
+        "masscan",
+        "-p", ports_str,
+        TARGET_RANGE,
+        "--rate", str(MASSCAN_RATE),
+        "--wait", "5",
+        "-oJ", "-"
+    ]
+    # Create a Queue and launch worker threads.
+    q = Queue()
+    threads = []
+    cnt = 0
+    # Append exclusion subnets to the command.
+    for subnet in COMMON_GOVERNMENT_SUBNETS:
+        cmd += ["--exclude", subnet]
+        cnt += 1
+        if cnt == 20:
+            sub_task(cmd,q,threads)
+            cnt = 0
+            cmd = [
+                "masscan",
+                "-p", ports_str,
+                TARGET_RANGE,
+                "--rate", str(MASSCAN_RATE),
+                "--wait", "5",
+                "-oJ", "-"
+            ]
 
     # Send a sentinel (None) to each worker thread to signal termination.
     for _ in range(NUM_WORKER_THREADS):

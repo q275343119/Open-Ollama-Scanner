@@ -22,7 +22,7 @@ def get_ips_from_file(filename):
     with open(filename,"r",encoding="utf-8") as f:
         lines = f.readline()
         while lines:
-            yield lines.split(",")[0]
+            yield lines.split(",")[0].replace('"',"")
             lines = f.readline()
 
 
