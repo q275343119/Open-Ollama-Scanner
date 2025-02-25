@@ -19,15 +19,16 @@ def get_ips_from_file(filename):
     Returns:
 
     """
-    with open(filename,"r",encoding="utf-8") as f:
+    with open(filename, "r", encoding="utf-8") as f:
         lines = f.readline()
         while lines:
-            yield lines.split(",")[0].replace('"',"")
+            if lines.split(",")[1].replace('"', "") != "-":
+                yield lines.split(",")[0].replace('"', "")
             lines = f.readline()
-
 
 
 if __name__ == '__main__':
     ip_file = "IP2LOCATION-LITE-DB1.NEW.CSV"
     for ip in get_ips_from_file(ip_file):
         print(ip)
+        break
