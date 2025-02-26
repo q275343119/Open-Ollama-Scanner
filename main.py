@@ -94,9 +94,9 @@ async def query_ollama_endpoints(session: ClientSession, ip: str, port: int):
                     models = ";".join(model_list)
                     return FreeOllama(ip=ip, models=models)
 
-    except Exception:
-        raise
-
+    except Exception as e:
+        print(e)
+        return None
     return None
 
 
