@@ -38,22 +38,11 @@ HTTP_TIMEOUT = 5
 MASSCAN_RATE = 500000
 TARGET_RANGE = "0.0.0.0/0"
 PORTS_TO_SCAN = [11434]
-CSV_FILENAME = f"ollama_scan_results_{int(time.time())}.csv"
 
 # -------------------------------------------------------------------
 # CSV Writer Setup: Thread-Safe CSV Writing
 # -------------------------------------------------------------------
 csv_lock = asyncio.Lock()
-
-
-def get_csv_writer():
-    file_exists = os.path.isfile(CSV_FILENAME)
-    csv_file = open(CSV_FILENAME, "a", newline="", encoding="utf-8")
-    fieldnames = ["ip", "port", "ps_url", "reachable", "valid_ollama", "ps_data", "system_data", "error"]
-    writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
-    if not file_exists:
-        writer.writeheader()
-    return csv_file, writer
 
 
 # -------------------------------------------------------------------
@@ -92,7 +81,7 @@ async def query_ollama_endpoints(session: ClientSession, ip: str, port: int):
                 model_list = extract_model_ids(data)
                 if model_list:
                     models = ";".join(model_list)
-                    return FreeOllama(ip=ip, models=models)
+                    return FreeOllama(ip=f"{ip}:{port}", models=models)
 
     except Exception as e:
         print(e)
@@ -119,7 +108,6 @@ async def masscan_streaming_scan(target_range, progress_bar):
 
     print(f"[+] Starting masscan with: {' '.join(cmd)}")
     print(f"[+] Worker threads: {NUM_WORKER_THREADS}")
-    print(f"[+] Saving valid hosts (with models) to: {CSV_FILENAME}")
 
     process = await aiosubprocess.create_subprocess_exec(
         *cmd, stdout=aiosubprocess.PIPE, stderr=aiosubprocess.PIPE
@@ -141,7 +129,7 @@ async def masscan_streaming_scan(target_range, progress_bar):
                     if port:
                         await process_task(ip, port)
             count += 1
-            progress_bar.update(1)  # Update progress bar for each processed IP
+    # Update progress bar for each processed IP
 
     _, err_output = await process.communicate()
     if err_output:
@@ -149,6 +137,7 @@ async def masscan_streaming_scan(target_range, progress_bar):
     # print("[!] masscan stderr:", err_output)
 
     print("[+] Scanning & processing complete.")
+    progress_bar.update(1)
 
 
 # -------------------------------------------------------------------
@@ -164,9 +153,10 @@ async def process_task(ip, port):
                     # 更新已存在的记录
                     stmt = select(FreeOllama).where(FreeOllama.ip == po.ip)
                     result = await session.execute(stmt)
-                    existing_po = result.scalar_one()
-                    if len(existing_po) > 0:
-                        existing_po.models = po.models  # 只更新models字段
+                    existing_po = result.one_or_none()
+                    if existing_po:
+                        existing_po[0].models = po.models  # 只更新models字段
+                        existing_po[0].active = 1
                     else:
                         po.active = 1  # 新记录默认为活跃状态
                         session.add(po)
@@ -183,9 +173,9 @@ async def process_task(ip, port):
 async def main():
     total_ranges = len(TARGET_RANGE_LIST)  # Calculate the total number of IP ranges
     progress_bar = tqdm(total=total_ranges, desc="Scanning IP Ranges")
-    async with asyncio.TaskGroup() as tg:
-        for target_range in TARGET_RANGE_LIST:
-            tg.create_task(masscan_streaming_scan(target_range, progress_bar))
+
+    for target_range in TARGET_RANGE_LIST:
+        await masscan_streaming_scan(target_range, progress_bar)
     progress_bar.close()
 
 
