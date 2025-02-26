@@ -10,11 +10,13 @@ import json
 import csv
 import os
 import time
-import aiohttp
+from sqlalchemy import select
+
 import asyncio.subprocess as aiosubprocess
 from aiohttp import ClientSession, ClientTimeout
 from tqdm import tqdm
 
+from database import FreeOllama, get_db
 from ips import get_ips_from_file
 
 # -------------------------------------------------------------------
@@ -27,12 +29,12 @@ COMMON_GOVERNMENT_SUBNETS = [
 ]
 IPS_FILE = "IP2LOCATION-LITE-DB1.NEW.CSV"
 TARGET_RANGE_LIST = list(get_ips_from_file(IPS_FILE))  # Load all IPs into memory
-
+# TARGET_RANGE_LIST = ['1.68.0.0/14']
 # -------------------------------------------------------------------
 # Configurable Parameters
 # -------------------------------------------------------------------
 NUM_WORKER_THREADS = 500
-HTTP_TIMEOUT = 2
+HTTP_TIMEOUT = 5
 MASSCAN_RATE = 500000
 TARGET_RANGE = "0.0.0.0/0"
 PORTS_TO_SCAN = [11434]
@@ -43,6 +45,7 @@ CSV_FILENAME = f"ollama_scan_results_{int(time.time())}.csv"
 # -------------------------------------------------------------------
 csv_lock = asyncio.Lock()
 
+
 def get_csv_writer():
     file_exists = os.path.isfile(CSV_FILENAME)
     csv_file = open(CSV_FILENAME, "a", newline="", encoding="utf-8")
@@ -52,51 +55,50 @@ def get_csv_writer():
         writer.writeheader()
     return csv_file, writer
 
-csv_file_handle, csv_writer = get_csv_writer()
+
+# -------------------------------------------------------------------
+# Function: extract_model_ids
+# -------------------------------------------------------------------
+def extract_model_ids(data_dict):
+    """
+    提取字典中 'data' 列表中的所有 'id' 值。
+
+    Args:
+        data_dict (dict): 包含 'data' 列表的字典。
+
+    Returns:
+        list: 包含所有 'id' 的列表。
+    """
+    ids = []
+    if 'data' in data_dict and isinstance(data_dict['data'], list):
+        for item in data_dict['data']:
+            if isinstance(item, dict) and 'id' in item:
+                ids.append(item['id'])
+    return ids
+
 
 # -------------------------------------------------------------------
 # Function: query_ollama_endpoints
 # -------------------------------------------------------------------
 async def query_ollama_endpoints(session: ClientSession, ip: str, port: int):
     base_url = f"http://{ip}:{port}"
-    data_collected = {
-        "ip": ip,
-        "port": port,
-        "reachable": False,
-        "valid_ollama": False,
-        "ps_data": None,
-        "system_data": None,
-        "error": None
-    }
-
     try:
-        ps_url = f"{base_url}/api/ps"
-        async with session.get(ps_url, timeout=HTTP_TIMEOUT) as response:
+        ps_url = f"{base_url}/v1/models"
+        async with session.get(ps_url, headers={"User-Agent": "PostmanRuntime-ApipostRuntime/1.1.0"},
+                               timeout=HTTP_TIMEOUT) as response:
+
             if response.status == 200:
-                data_collected["reachable"] = True
-                try:
-                    ps_json = await response.json()
-                    data_collected["ps_data"] = ps_json
-                    if "models" in ps_json and isinstance(ps_json["models"], list) and ps_json["models"]:
-                        data_collected["valid_ollama"] = True
-                except ValueError:
-                    pass
-    except Exception as e:
-        data_collected["error"] = str(e)
+                data = await response.json()
+                model_list = extract_model_ids(data)
+                if model_list:
+                    models = ";".join(model_list)
+                    return FreeOllama(ip=ip, models=models)
 
-    if data_collected["valid_ollama"]:
-        try:
-            sys_url = f"{base_url}/api/system"
-            async with session.get(sys_url, timeout=HTTP_TIMEOUT) as sys_response:
-                if sys_response.status == 200:
-                    try:
-                        data_collected["system_data"] = await sys_response.json()
-                    except ValueError:
-                        pass
-        except Exception:
-            pass
+    except Exception:
+        raise
 
-    return data_collected
+    return None
+
 
 # -------------------------------------------------------------------
 # Function: masscan_streaming_scan
@@ -108,7 +110,7 @@ async def masscan_streaming_scan(target_range, progress_bar):
         "-p", ports_str,
         target_range,
         "--rate", str(MASSCAN_RATE),
-        "--wait", "5",
+        "--wait", "2",
         "-oJ", "-"
     ]
     # Append exclusion subnets to the command.
@@ -143,31 +145,37 @@ async def masscan_streaming_scan(target_range, progress_bar):
 
     _, err_output = await process.communicate()
     if err_output:
-        print("[!] masscan stderr:", err_output)
+        pass
+    # print("[!] masscan stderr:", err_output)
 
     print("[+] Scanning & processing complete.")
+
 
 # -------------------------------------------------------------------
 # Function: process_task
 # -------------------------------------------------------------------
 async def process_task(ip, port):
+    print("process_task")
     async with ClientSession(timeout=ClientTimeout(total=HTTP_TIMEOUT)) as session:
-        result = await query_ollama_endpoints(session, ip, port)
-        if result["valid_ollama"]:
-            row = {
-                "ip": result["ip"],
-                "port": result["port"],
-                "ps_url": f"http://{ip}:{port}/api/ps",
-                "reachable": result["reachable"],
-                "valid_ollama": result["valid_ollama"],
-                "ps_data": json.dumps(result["ps_data"]),
-                "system_data": json.dumps(result["system_data"]),
-                "error": result["error"]
-            }
-            async with csv_lock:
-                csv_writer.writerow(row)
-                csv_file_handle.flush()
+        po = await query_ollama_endpoints(session, ip, port)
+        if po:
+            async for session in get_db():
+                try:
+                    # 更新已存在的记录
+                    stmt = select(FreeOllama).where(FreeOllama.ip == po.ip)
+                    result = await session.execute(stmt)
+                    existing_po = result.scalar_one()
+                    if len(existing_po) > 0:
+                        existing_po.models = po.models  # 只更新models字段
+                    else:
+                        po.active = 1  # 新记录默认为活跃状态
+                        session.add(po)
+                    await session.commit()
+                except Exception as e:
+                    raise e
+
             print(f"[+] Found model(s)! Valid Ollama at: {ip}:{port}")
+
 
 # -------------------------------------------------------------------
 # Main function with Progress Bar
@@ -175,10 +183,11 @@ async def process_task(ip, port):
 async def main():
     total_ranges = len(TARGET_RANGE_LIST)  # Calculate the total number of IP ranges
     progress_bar = tqdm(total=total_ranges, desc="Scanning IP Ranges")
-    for target_range in TARGET_RANGE_LIST:
-        await masscan_streaming_scan(target_range, progress_bar)
+    async with asyncio.TaskGroup() as tg:
+        for target_range in TARGET_RANGE_LIST:
+            tg.create_task(masscan_streaming_scan(target_range, progress_bar))
     progress_bar.close()
+
 
 if __name__ == "__main__":
     asyncio.run(main())
-    csv_file_handle.close()

@@ -5,7 +5,7 @@
 # @Description:
 
 
-def get_ips_from_file(filename):
+def get_ips_from_file(filename, region="CN"):
     """
     file context:
     "0.0.0.0/8","-","-"
@@ -15,6 +15,7 @@ def get_ips_from_file(filename):
     "1.0.4.0/22","AU","Australia"
     Args:
         filename:
+        region:
 
     Returns:
 
@@ -22,7 +23,7 @@ def get_ips_from_file(filename):
     with open(filename, "r", encoding="utf-8") as f:
         lines = f.readline()
         while lines:
-            if lines.split(",")[1].replace('"', "") != "-":
+            if lines.split(",")[1].replace('"', "") != "-" and lines.split(",")[1] == f'"{region}"':
                 yield lines.split(",")[0].replace('"', "")
             lines = f.readline()
 
