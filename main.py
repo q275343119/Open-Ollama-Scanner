@@ -7,9 +7,6 @@ Uses asyncio and aiohttp for improved concurrency in HTTP requests.
 
 import asyncio
 import json
-import csv
-import os
-import time
 from sqlalchemy import select
 
 import asyncio.subprocess as aiosubprocess
@@ -29,7 +26,8 @@ COMMON_GOVERNMENT_SUBNETS = [
 ]
 IPS_FILE = "IP2LOCATION-LITE-DB1.NEW.CSV"
 TARGET_RANGE_LIST = list(get_ips_from_file(IPS_FILE))  # Load all IPs into memory
-# TARGET_RANGE_LIST = ['1.68.0.0/14']
+
+MAX_CONCURRENT_TASKS = 10
 # -------------------------------------------------------------------
 # Configurable Parameters
 # -------------------------------------------------------------------
@@ -51,12 +49,6 @@ csv_lock = asyncio.Lock()
 def extract_model_ids(data_dict):
     """
     提取字典中 'data' 列表中的所有 'id' 值。
-
-    Args:
-        data_dict (dict): 包含 'data' 列表的字典。
-
-    Returns:
-        list: 包含所有 'id' 的列表。
     """
     ids = []
     if 'data' in data_dict and isinstance(data_dict['data'], list):
@@ -84,7 +76,6 @@ async def query_ollama_endpoints(session: ClientSession, ip: str, port: int):
                     return FreeOllama(ip=f"{ip}:{port}", models=models)
 
     except Exception as e:
-        print(e)
         return None
     return None
 
@@ -92,59 +83,61 @@ async def query_ollama_endpoints(session: ClientSession, ip: str, port: int):
 # -------------------------------------------------------------------
 # Function: masscan_streaming_scan
 # -------------------------------------------------------------------
-async def masscan_streaming_scan(target_range, progress_bar):
-    ports_str = ",".join(map(str, PORTS_TO_SCAN))
-    cmd = [
-        "masscan",
-        "-p", ports_str,
-        target_range,
-        "--rate", str(MASSCAN_RATE),
-        "--wait", "2",
-        "-oJ", "-"
-    ]
-    # Append exclusion subnets to the command.
-    for subnet in COMMON_GOVERNMENT_SUBNETS:
-        cmd += ["--exclude", subnet]
+async def masscan_streaming_scan(target_range, progress_bar,semaphore):
+    async with semaphore:
+        ports_str = ",".join(map(str, PORTS_TO_SCAN))
+        cmd = [
+            "masscan",
+            "-p", ports_str,
+            target_range,
+            "--rate", str(MASSCAN_RATE),
+            "--wait", "2",
+            "-oJ", "-"
+        ]
+        # Append exclusion subnets to the command.
+        for subnet in COMMON_GOVERNMENT_SUBNETS:
+            cmd += ["--exclude", subnet]
 
-    print(f"[+] Starting masscan with: {' '.join(cmd)}")
-    print(f"[+] Worker threads: {NUM_WORKER_THREADS}")
+        process = await aiosubprocess.create_subprocess_exec(
+            *cmd, stdout=aiosubprocess.PIPE, stderr=aiosubprocess.PIPE
+        )
 
-    process = await aiosubprocess.create_subprocess_exec(
-        *cmd, stdout=aiosubprocess.PIPE, stderr=aiosubprocess.PIPE
-    )
+        # Initialize IP counter for progress tracking
+        tasks = []  # Collect tasks here
+        async for line in process.stdout:
+            line = line.decode().strip()
+            if line and line.startswith("{") and line.endswith("}"):
 
-    count = 0  # Initialize IP counter for progress tracking
-    async for line in process.stdout:
-        line = line.decode().strip()
-        if line and line.startswith("{") and line.endswith("}"):
-            try:
-                obj = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            ip = obj.get("ip")
-            ports_info = obj.get("ports", [])
-            if ip and ports_info:
-                for pinfo in ports_info:
-                    port = pinfo.get("port")
-                    if port:
-                        await process_task(ip, port)
-            count += 1
-    # Update progress bar for each processed IP
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                ip = obj.get("ip")
+                ports_info = obj.get("ports", [])
+                if ip and ports_info:
+                    for pinfo in ports_info:
+                        port = pinfo.get("port")
+                        if port:
+                            # Gather all process_task functions to execute concurrently
+                            tasks.append(process_task(ip, port))
 
-    _, err_output = await process.communicate()
-    if err_output:
-        pass
-    # print("[!] masscan stderr:", err_output)
 
-    print("[+] Scanning & processing complete.")
-    progress_bar.update(1)
+        # Run all tasks concurrently
+        if tasks:
+            await asyncio.gather(*tasks)
+
+        _, err_output = await process.communicate()
+        if err_output:
+            pass
+        # print("[!] masscan stderr:", err_output)
+
+        progress_bar.update(1)
 
 
 # -------------------------------------------------------------------
 # Function: process_task
 # -------------------------------------------------------------------
 async def process_task(ip, port):
-    print("process_task")
     async with ClientSession(timeout=ClientTimeout(total=HTTP_TIMEOUT)) as session:
         po = await query_ollama_endpoints(session, ip, port)
         if po:
@@ -162,7 +155,7 @@ async def process_task(ip, port):
                         session.add(po)
                     await session.commit()
                 except Exception as e:
-                    raise e
+                    return None
 
             print(f"[+] Found model(s)! Valid Ollama at: {ip}:{port}")
 
@@ -174,10 +167,23 @@ async def main():
     total_ranges = len(TARGET_RANGE_LIST)  # Calculate the total number of IP ranges
     progress_bar = tqdm(total=total_ranges, desc="Scanning IP Ranges")
 
-    for target_range in TARGET_RANGE_LIST:
-        await masscan_streaming_scan(target_range, progress_bar)
+    # Create a semaphore to limit concurrent tasks
+    semaphore = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
+
+    tasks = []
+    for idx,target_range in enumerate(TARGET_RANGE_LIST):
+
+        tasks.append(masscan_streaming_scan(target_range, progress_bar,semaphore))
+        if idx % 100 == 0:
+            if tasks:
+                await asyncio.gather(*tasks)
+                tasks.clear()
+    else:
+        if tasks:
+            await asyncio.gather(*tasks)
     progress_bar.close()
 
 
 if __name__ == "__main__":
     asyncio.run(main())
+
